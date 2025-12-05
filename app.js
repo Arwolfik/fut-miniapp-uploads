@@ -190,38 +190,45 @@ async function showProgress(barId, statusId) {
 // ======================= ЗАПУСК =======================
 (async () => {
     try {
-        // 1. Ждём VK Bridge
-        const bridge = await waitForVkBridge();
-
-        if (bridge) {
-            await bridge.send("VKWebAppInit");
-            const info = await bridge.send("VKWebAppGetUserInfo");
-            rawUserId = info.id;
-            userPlatform = "vk";
-            console.log("VK пользователь:", rawUserId);
-        } else if (window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
-            // 2. Если не VK — значит Telegram
+        // Сначала пробуем Telegram (там vkBridge почти никогда не нужен)
+        if (window.Telegram?.WebApp) {
             const tg = window.Telegram.WebApp;
             tg.ready();
             tg.expand();
-            rawUserId = tg.initDataUnsafe.user.id;
+
+            console.log("Telegram WebApp initDataUnsafe:", tg.initDataUnsafe);
+            rawUserId = tg.initDataUnsafe?.user?.id;
+
+            if (!rawUserId) {
+                throw new Error("Telegram не передал ID пользователя. Проверьте запуск из бота и настройки WebApp URL.");
+            }
+
             userPlatform = "tg";
             console.log("Telegram пользователь:", rawUserId);
         } else {
-            throw new Error("Платформа не определена");
+            // Если Telegram нет — пробуем VK
+            const bridge = await waitForVkBridge();
+            if (bridge) {
+                await bridge.send("VKWebAppInit");
+                const info = await bridge.send("VKWebAppGetUserInfo");
+                rawUserId = info.id;
+                userPlatform = "vk";
+                console.log("VK пользователь:", rawUserId);
+            } else {
+                throw new Error("Платформа не определена (ни Telegram.WebApp, ни vkBridge).");
+            }
         }
 
         console.log("rawUserId =", rawUserId, "platform (из окружения) =", userPlatform);
 
-        // 3. Лёгкая проверка, что пользователь есть в базе
+        // Лёгкая проверка, что пользователь есть в базе
         const user = await findUser(rawUserId);
         if (!user) {
             throw new Error("Вы не зарегистрированы. Напишите в бот");
         }
-        // platform можем уточнить, но recordId теперь не храним
         userPlatform = user.platform || userPlatform;
 
-        // 4. Показываем первый экран
+        // Показываем первый экран
         showScreen("welcome");
     } catch (err) {
         console.error(err);
@@ -266,11 +273,11 @@ async function handleUpload(num, fieldId, nextScreen = null) {
     }
 
     try {
-        // На КАЖДОЙ загрузке ещё раз ищем запись по tg-id
         if (!rawUserId) {
             throw new Error("Не удалось определить пользователя. Перезапустите мини-апп.");
         }
 
+        // На КАЖДОЙ загрузке ещё раз ищем запись по tg-id
         const user = await findUser(rawUserId);
         console.log("handleUpload → findUser:", user);
 
