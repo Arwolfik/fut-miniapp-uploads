@@ -60,7 +60,6 @@ async function waitForVkBridge() {
 /**
  * Ищем пользователя по полю `tg-id`.
  * Варианты значений: "123456" или "123456_VK".
- * Неважно, откуда пришёл id (TG или VK) — ищем обе формы.
  */
 async function findUser(id) {
     const idStr = String(id);
@@ -68,7 +67,7 @@ async function findUser(id) {
     const tgVal = encodeURIComponent(idStr);           // "123456"
     const vkVal = encodeURIComponent(`${idStr}_VK`);  // "123456_VK"
 
-    // ОДИН запрос: ищем tg-id == id ИЛИ tg-id == id_VK
+    // Ищем tg-id == id ИЛИ tg-id == id_VK
     const url = `${RECORDS_ENDPOINT}?where=(tg-id,eq,${tgVal})~or(tg-id,eq,${vkVal})&fields=*`;
     console.log("Запрос поиска пользователя:", url);
 
@@ -98,7 +97,7 @@ async function findUser(id) {
         return null;
     }
 
-    // Определяем платформу по содержимому tg-id
+    // Определяем платформу по содержимому tg-id (если нужно)
     let platform = "tg";
     const tgFieldValue = rec["tg-id"] ?? rec["tg id"];
     if (typeof tgFieldValue === "string" && tgFieldValue.endsWith("_VK")) {
@@ -107,6 +106,37 @@ async function findUser(id) {
 
     console.log("Итог findUser → recordId =", recordId, "platform =", platform);
     return { recordId, platform };
+}
+
+/**
+ * Гарантируем, что currentRecordId заполнен:
+ * если он пустой — повторно ищем пользователя в базе.
+ */
+async function ensureRecordId() {
+    if (currentRecordId !== null && currentRecordId !== undefined && currentRecordId !== "") {
+        return currentRecordId;
+    }
+
+    console.warn("ensureRecordId: currentRecordId пустой, пробуем найти пользователя заново. rawUserId =", rawUserId);
+
+    if (!rawUserId) {
+        throw new Error("Не удалось определить пользователя. Перезапустите мини-апп.");
+    }
+
+    const user = await findUser(rawUserId);
+    console.log("Повторный поиск пользователя в ensureRecordId:", user);
+
+    if (!user || !user.recordId) {
+        throw new Error("Не удалось найти вашу запись в базе. Напишите в бот.");
+    }
+
+    currentRecordId = user.recordId;
+    if (user.platform) {
+        userPlatform = user.platform;
+    }
+
+    console.log("ensureRecordId: восстановили currentRecordId =", currentRecordId);
+    return currentRecordId;
 }
 
 async function uploadFile(recordId, fieldId, file, extra = {}) {
@@ -144,7 +174,7 @@ async function uploadFile(recordId, fieldId, file, extra = {}) {
 
     // 2. Обновляем запись в таблице
     const body = {
-        Id: recordId,          // PK — то, что вернули из findUser (Id/id)
+        Id: recordId,          // PK — то, что вернули из findUser/ensureRecordId
         [fieldId]: [fileObj],  // Attachment как массив
         ...extra
     };
@@ -223,8 +253,7 @@ async function showProgress(barId, statusId) {
         }
 
         currentRecordId = user.recordId;
-        // платформу можно уточнить по таблице
-        userPlatform = user.platform;
+        userPlatform = user.platform || userPlatform;
 
         console.log("currentRecordId =", currentRecordId, "platform (уточнён) =", userPlatform);
 
@@ -265,13 +294,6 @@ async function handleUpload(num, fieldId, nextScreen = null) {
         return;
     }
 
-    if (currentRecordId === null || currentRecordId === undefined || currentRecordId === "") {
-        err.textContent = "Не найден ID вашей записи. Перезапустите мини-апп.";
-        err.classList.remove("hidden");
-        console.log("currentRecordId пустой при загрузке:", currentRecordId);
-        return;
-    }
-
     uploadState[num] = true;
     if (btn) {
         btn.disabled = true;
@@ -280,14 +302,18 @@ async function handleUpload(num, fieldId, nextScreen = null) {
     }
 
     try {
+        // 🔁 Критично: гарантируем, что у нас есть recordId
+        const recordId = await ensureRecordId();
+
         await showProgress(`progress${num}`, `status${num}`);
         const extra =
             num === 1
                 ? { [DATE_FIELD_ID]: new Date().toISOString().split("T")[0] }
                 : {};
-        await uploadFile(currentRecordId, fieldId, file, extra);
+        await uploadFile(recordId, fieldId, file, extra);
         nextScreen ? showScreen(nextScreen) : showScreen("result");
     } catch (e) {
+        console.error(e);
         err.textContent = e.message || "Ошибка загрузки";
         err.classList.remove("hidden");
     } finally {
