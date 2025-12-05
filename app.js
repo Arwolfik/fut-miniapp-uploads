@@ -12,9 +12,8 @@ const SOLUTION_FIELDS = {
 };
 const DATE_FIELD_ID = "ckg3vnwv4h6wg9a";
 
-let currentRecordId = null; // PK (Id / id) из NocoDB
 let userPlatform = null;    // 'tg' или 'vk'
-let rawUserId = null;
+let rawUserId = null;       // реальный id из TG/VK
 
 const uploadState = {
     1: false,
@@ -78,6 +77,7 @@ async function findUser(id) {
             "xc-token": API_KEY
         }
     });
+
     const data = await res.json();
     console.log("Ответ поиска по tg-id:", data);
 
@@ -108,40 +108,9 @@ async function findUser(id) {
     return { recordId, platform };
 }
 
-/**
- * Гарантируем, что currentRecordId заполнен:
- * если он пустой — повторно ищем пользователя в базе.
- */
-async function ensureRecordId() {
-    if (currentRecordId !== null && currentRecordId !== undefined && currentRecordId !== "") {
-        return currentRecordId;
-    }
-
-    console.warn("ensureRecordId: currentRecordId пустой, пробуем найти пользователя заново. rawUserId =", rawUserId);
-
-    if (!rawUserId) {
-        throw new Error("Не удалось определить пользователя. Перезапустите мини-апп.");
-    }
-
-    const user = await findUser(rawUserId);
-    console.log("Повторный поиск пользователя в ensureRecordId:", user);
-
-    if (!user || !user.recordId) {
-        throw new Error("Не удалось найти вашу запись в базе. Напишите в бот.");
-    }
-
-    currentRecordId = user.recordId;
-    if (user.platform) {
-        userPlatform = user.platform;
-    }
-
-    console.log("ensureRecordId: восстановили currentRecordId =", currentRecordId);
-    return currentRecordId;
-}
-
 async function uploadFile(recordId, fieldId, file, extra = {}) {
     if (recordId === null || recordId === undefined || recordId === "") {
-        throw new Error("Не найден ID вашей записи. Попробуйте перезапустить мини-апп.");
+        throw new Error("Не найден ID вашей записи в базе.");
     }
 
     // 1. Загружаем файл в storage
@@ -174,7 +143,7 @@ async function uploadFile(recordId, fieldId, file, extra = {}) {
 
     // 2. Обновляем запись в таблице
     const body = {
-        Id: recordId,          // PK — то, что вернули из findUser/ensureRecordId
+        Id: recordId,          // PK — то, что вернули из findUser
         [fieldId]: [fileObj],  // Attachment как массив
         ...extra
     };
@@ -244,18 +213,13 @@ async function showProgress(barId, statusId) {
 
         console.log("rawUserId =", rawUserId, "platform (из окружения) =", userPlatform);
 
-        // 3. Ищем пользователя в базе по tg-id (учитываем _VK)
+        // 3. Лёгкая проверка, что пользователь есть в базе
         const user = await findUser(rawUserId);
-        console.log("findUser вернул:", user);
-
         if (!user) {
             throw new Error("Вы не зарегистрированы. Напишите в бот");
         }
-
-        currentRecordId = user.recordId;
+        // platform можем уточнить, но recordId теперь не храним
         userPlatform = user.platform || userPlatform;
-
-        console.log("currentRecordId =", currentRecordId, "platform (уточнён) =", userPlatform);
 
         // 4. Показываем первый экран
         showScreen("welcome");
@@ -302,8 +266,19 @@ async function handleUpload(num, fieldId, nextScreen = null) {
     }
 
     try {
-        // 🔁 Критично: гарантируем, что у нас есть recordId
-        const recordId = await ensureRecordId();
+        // На КАЖДОЙ загрузке ещё раз ищем запись по tg-id
+        if (!rawUserId) {
+            throw new Error("Не удалось определить пользователя. Перезапустите мини-апп.");
+        }
+
+        const user = await findUser(rawUserId);
+        console.log("handleUpload → findUser:", user);
+
+        if (!user || !user.recordId) {
+            throw new Error("Не удалось найти вашу запись. Напишите в бот.");
+        }
+
+        const recordId = user.recordId;
 
         await showProgress(`progress${num}`, `status${num}`);
         const extra =
