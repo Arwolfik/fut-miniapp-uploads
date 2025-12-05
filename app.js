@@ -43,7 +43,7 @@ function showError(msg) {
     </div>`;
 }
 
-// Ждём vkBridge (обязательно для VK Mini Apps 2025)
+// Ждём vkBridge (для VK Mini Apps)
 async function waitForVkBridge() {
     return new Promise(resolve => {
         if (window.vkBridge) return resolve(vkBridge);
@@ -76,13 +76,17 @@ async function findUser(id) {
     let data = await res.json();
     console.log("Результат поиска TG:", data);
 
-    if (data.list?.length > 0 && data.list[0].Id != null) {
-        const recordId = data.list[0].Id;
-        console.log("Найден TG-пользователь, Id =", recordId);
-        return {
-            recordId,
-            platform: "tg"
-        };
+    if (data.list?.length > 0) {
+        const rec = data.list[0];
+        console.log("Найдена строка (TG):", rec);
+        if (rec.Id !== null && rec.Id !== undefined && rec.Id !== "") {
+            const recordId = rec.Id; // берём Id как есть
+            console.log("Найден TG-пользователь, Id =", recordId);
+            return {
+                recordId,
+                platform: "tg"
+            };
+        }
     }
 
     // 2) Ищем как VK (ID_VK)
@@ -101,21 +105,25 @@ async function findUser(id) {
     data = await res.json();
     console.log("Результат поиска VK:", data);
 
-    if (data.list?.length > 0 && data.list[0].Id != null) {
-        const recordId = data.list[0].Id;
-        console.log("Найден VK-пользователь, Id =", recordId);
-        return {
-            recordId,
-            platform: "vk"
-        };
+    if (data.list?.length > 0) {
+        const rec = data.list[0];
+        console.log("Найдена строка (VK):", rec);
+        if (rec.Id !== null && rec.Id !== undefined && rec.Id !== "") {
+            const recordId = rec.Id;
+            console.log("Найден VK-пользователь, Id =", recordId);
+            return {
+                recordId,
+                platform: "vk"
+            };
+        }
     }
 
-    console.log("Пользователь НЕ найден или Id пустой. tg-id искали:", idStr, "и", vkVal);
+    console.log("Пользователь НЕ найден или поле Id пустое. tg-id искали:", idStr, "и", vkVal);
     return null;
 }
 
 async function uploadFile(recordId, fieldId, file, extra = {}) {
-    if (!recordId) {
+    if (recordId === null || recordId === undefined || recordId === "") {
         throw new Error("Не найден ID вашей записи. Попробуйте перезапустить мини-апп.");
     }
 
@@ -216,6 +224,8 @@ async function showProgress(barId, statusId) {
             throw new Error("Платформа не определена");
         }
 
+        console.log("rawUserId =", rawUserId, "platform =", userPlatform);
+
         // 3. Ищем пользователя в базе
         const user = await findUser(rawUserId);
         if (!user) throw new Error("Вы не зарегистрированы. Напишите в бот");
@@ -223,7 +233,7 @@ async function showProgress(barId, statusId) {
         currentRecordId = user.recordId;
         userPlatform = user.platform;
 
-        console.log("currentRecordId =", currentRecordId, "platform =", userPlatform);
+        console.log("currentRecordId =", currentRecordId, "platform (уточнён) =", userPlatform);
 
         // 4. Показываем первый экран
         showScreen("welcome");
@@ -262,9 +272,10 @@ async function handleUpload(num, fieldId, nextScreen = null) {
         return;
     }
 
-    if (!currentRecordId) {
+    if (currentRecordId === null || currentRecordId === undefined || currentRecordId === "") {
         err.textContent = "Не найден ID вашей записи. Перезапустите мини-апп.";
         err.classList.remove("hidden");
+        console.log("currentRecordId пустой при загрузке:", currentRecordId);
         return;
     }
 
