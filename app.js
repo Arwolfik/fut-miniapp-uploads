@@ -12,8 +12,8 @@ const SOLUTION_FIELDS = {
 };
 const DATE_FIELD_ID = "ckg3vnwv4h6wg9a";
 
-let currentRecordId = null; // сюда кладём именно Id из NocoDB
-let userPlatform = null;
+let currentRecordId = null; // PK (Id / id) из NocoDB
+let userPlatform = null;    // 'tg' или 'vk'
 let rawUserId = null;
 
 const uploadState = {
@@ -57,69 +57,56 @@ async function waitForVkBridge() {
     });
 }
 
-// Поиск пользователя в NocoDB
+/**
+ * Ищем пользователя по полю `tg-id`.
+ * Варианты значений: "123456" или "123456_VK".
+ * Неважно, откуда пришёл id (TG или VK) — ищем обе формы.
+ */
 async function findUser(id) {
     const idStr = String(id);
 
-    // 1) Ищем по голому TG ID
-    const encodedTg = encodeURIComponent(idStr);
-    let res = await fetch(
-        `${RECORDS_ENDPOINT}?where=(tg-id,eq,${encodedTg})&fields=Id,tg-id`,
-        {
-            headers: {
-                "Content-Type": "application/json",
-                "accept": "application/json",
-                "xc-token": API_KEY
-            }
-        }
-    );
-    let data = await res.json();
-    console.log("Результат поиска TG:", data);
+    const tgVal = encodeURIComponent(idStr);           // "123456"
+    const vkVal = encodeURIComponent(`${idStr}_VK`);  // "123456_VK"
 
-    if (data.list?.length > 0) {
-        const rec = data.list[0];
-        console.log("Найдена строка (TG):", rec);
-        if (rec.Id !== null && rec.Id !== undefined && rec.Id !== "") {
-            const recordId = rec.Id; // берём Id как есть
-            console.log("Найден TG-пользователь, Id =", recordId);
-            return {
-                recordId,
-                platform: "tg"
-            };
+    // ОДИН запрос: ищем tg-id == id ИЛИ tg-id == id_VK
+    const url = `${RECORDS_ENDPOINT}?where=(tg-id,eq,${tgVal})~or(tg-id,eq,${vkVal})&fields=*`;
+    console.log("Запрос поиска пользователя:", url);
+
+    const res = await fetch(url, {
+        headers: {
+            "Content-Type": "application/json",
+            "accept": "application/json",
+            "xc-token": API_KEY
         }
+    });
+    const data = await res.json();
+    console.log("Ответ поиска по tg-id:", data);
+
+    if (!data.list || data.list.length === 0) {
+        console.log("Пользователь НЕ найден по tg-id ни как TG, ни как VK");
+        return null;
     }
 
-    // 2) Ищем как VK (ID_VK)
-    const vkVal = `${idStr}_VK`;
-    const encodedVk = encodeURIComponent(vkVal);
-    res = await fetch(
-        `${RECORDS_ENDPOINT}?where=(tg-id,eq,${encodedVk})&fields=Id,tg-id`,
-        {
-            headers: {
-                "Content-Type": "application/json",
-                "accept": "application/json",
-                "xc-token": API_KEY
-            }
-        }
-    );
-    data = await res.json();
-    console.log("Результат поиска VK:", data);
+    const rec = data.list[0];
+    console.log("Найдена строка:", rec);
 
-    if (data.list?.length > 0) {
-        const rec = data.list[0];
-        console.log("Найдена строка (VK):", rec);
-        if (rec.Id !== null && rec.Id !== undefined && rec.Id !== "") {
-            const recordId = rec.Id;
-            console.log("Найден VK-пользователь, Id =", recordId);
-            return {
-                recordId,
-                platform: "vk"
-            };
-        }
+    // Пытаемся понять, какое поле — PK
+    let recordId = rec.Id ?? rec.id ?? rec.ID;
+
+    if (recordId === null || recordId === undefined || recordId === "") {
+        console.warn("В найденной записи нет корректного PK (Id/id). Ключи записи:", Object.keys(rec));
+        return null;
     }
 
-    console.log("Пользователь НЕ найден или поле Id пустое. tg-id искали:", idStr, "и", vkVal);
-    return null;
+    // Определяем платформу по содержимому tg-id
+    let platform = "tg";
+    const tgFieldValue = rec["tg-id"] ?? rec["tg id"];
+    if (typeof tgFieldValue === "string" && tgFieldValue.endsWith("_VK")) {
+        platform = "vk";
+    }
+
+    console.log("Итог findUser → recordId =", recordId, "platform =", platform);
+    return { recordId, platform };
 }
 
 async function uploadFile(recordId, fieldId, file, extra = {}) {
@@ -127,7 +114,7 @@ async function uploadFile(recordId, fieldId, file, extra = {}) {
         throw new Error("Не найден ID вашей записи. Попробуйте перезапустить мини-апп.");
     }
 
-    // 1. Загружаем файл
+    // 1. Загружаем файл в storage
     const form = new FormData();
     form.append("file", file);
     form.append("path", "solutions");
@@ -155,8 +142,9 @@ async function uploadFile(recordId, fieldId, file, extra = {}) {
         size: file.size
     };
 
+    // 2. Обновляем запись в таблице
     const body = {
-        Id: recordId,          // PK, как в рабочем примере
+        Id: recordId,          // PK — то, что вернули из findUser (Id/id)
         [fieldId]: [fileObj],  // Attachment как массив
         ...extra
     };
@@ -224,13 +212,18 @@ async function showProgress(barId, statusId) {
             throw new Error("Платформа не определена");
         }
 
-        console.log("rawUserId =", rawUserId, "platform =", userPlatform);
+        console.log("rawUserId =", rawUserId, "platform (из окружения) =", userPlatform);
 
-        // 3. Ищем пользователя в базе
+        // 3. Ищем пользователя в базе по tg-id (учитываем _VK)
         const user = await findUser(rawUserId);
-        if (!user) throw new Error("Вы не зарегистрированы. Напишите в бот");
+        console.log("findUser вернул:", user);
+
+        if (!user) {
+            throw new Error("Вы не зарегистрированы. Напишите в бот");
+        }
 
         currentRecordId = user.recordId;
+        // платформу можно уточнить по таблице
         userPlatform = user.platform;
 
         console.log("currentRecordId =", currentRecordId, "platform (уточнён) =", userPlatform);
