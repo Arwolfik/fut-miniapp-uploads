@@ -174,25 +174,22 @@ async function showProgress(barId, statusId) {
 // ======================= ЗАПУСК =======================
 (async () => {
     try {
-        // 1. Пытаемся определить платформу
+        // 1. Проверяем, есть ли настоящий Telegram-пользователь
+        const telegramUserId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id;
 
-        // Сначала Telegram
-        if (window.Telegram?.WebApp) {
+        if (telegramUserId) {
             const tg = window.Telegram.WebApp;
             tg.ready();
             tg.expand();
 
-            console.log("Telegram WebApp initDataUnsafe:", tg.initDataUnsafe);
-            rawUserId = tg.initDataUnsafe?.user?.id;
-
-            if (!rawUserId) {
-                throw new Error("Telegram не передал ID пользователя. Проверьте запуск из бота и настройки WebApp URL.");
-            }
-
+            rawUserId = telegramUserId;
             userPlatform = "tg";
+
+            console.log("Telegram WebApp initDataUnsafe:", window.Telegram.WebApp.initDataUnsafe);
             console.log("Telegram пользователь:", rawUserId);
         }
-        // Если Telegram нет — пробуем VK Bridge
+
+        // 2. Если Telegram-пользователя нет — пробуем VK
         else if (window.vkBridge) {
             const bridge = window.vkBridge;
 
@@ -203,20 +200,23 @@ async function showProgress(barId, statusId) {
             rawUserId = info.id;
             userPlatform = "vk";
             console.log("VK пользователь:", rawUserId);
-        } else {
-            throw new Error("Платформа не определена (ни Telegram.WebApp, ни vkBridge).");
+        }
+
+        // 3. Ничего не нашли — вообще не тот запуск
+        else {
+            throw new Error("Платформа не определена (ни Telegram с initData, ни vkBridge). Откройте мини-апп из бота или VK.");
         }
 
         console.log("rawUserId =", rawUserId, "platform (из окружения) =", userPlatform);
 
-        // 2. Лёгкая проверка, что пользователь есть в базе
+        // 4. Лёгкая проверка, что пользователь есть в базе
         const user = await findUser(rawUserId);
         if (!user) {
             throw new Error("Вы не зарегистрированы. Напишите в бот");
         }
         userPlatform = user.platform || userPlatform;
 
-        // 3. Показываем первый экран
+        // 5. Показываем первый экран
         showScreen("welcome");
     } catch (err) {
         console.error(err);
