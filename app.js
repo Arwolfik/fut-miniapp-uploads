@@ -15,11 +15,7 @@ const DATE_FIELD_ID = "ckg3vnwv4h6wg9a";
 let userPlatform = null;    // 'tg' или 'vk'
 let rawUserId = null;       // реальный id из TG/VK
 
-const uploadState = {
-    1: false,
-    2: false,
-    3: false
-};
+const uploadState = { 1: false, 2: false, 3: false };
 
 const screens = {
     welcome: document.getElementById("welcomeScreen"),
@@ -42,20 +38,6 @@ function showError(msg) {
     </div>`;
 }
 
-// Ждём vkBridge (для VK Mini Apps)
-async function waitForVkBridge() {
-    return new Promise(resolve => {
-        if (window.vkBridge) return resolve(vkBridge);
-        const timer = setInterval(() => {
-            if (window.vkBridge) {
-                clearInterval(timer);
-                resolve(window.vkBridge);
-            }
-        }, 50);
-        setTimeout(() => { clearInterval(timer); resolve(null); }, 4000);
-    });
-}
-
 /**
  * Ищем пользователя по полю `tg-id`.
  * Варианты значений: "123456" или "123456_VK".
@@ -66,8 +48,10 @@ async function findUser(id) {
     const tgVal = encodeURIComponent(idStr);           // "123456"
     const vkVal = encodeURIComponent(`${idStr}_VK`);  // "123456_VK"
 
-    // Ищем tg-id == id ИЛИ tg-id == id_VK
-    const url = `${RECORDS_ENDPOINT}?where=(tg-id,eq,${tgVal})~or(tg-id,eq,${vkVal})&fields=*`;
+    const url =
+        `${RECORDS_ENDPOINT}?where=` +
+        `(tg-id,eq,${tgVal})~or(tg-id,eq,${vkVal})&fields=*`;
+
     console.log("Запрос поиска пользователя:", url);
 
     const res = await fetch(url, {
@@ -109,7 +93,7 @@ async function findUser(id) {
 }
 
 async function uploadFile(recordId, fieldId, file, extra = {}) {
-    if (recordId === null || recordId === undefined || recordId === "") {
+    if (!recordId && recordId !== 0) {
         throw new Error("Не найден ID вашей записи в базе.");
     }
 
@@ -190,7 +174,9 @@ async function showProgress(barId, statusId) {
 // ======================= ЗАПУСК =======================
 (async () => {
     try {
-        // Сначала пробуем Telegram (там vkBridge почти никогда не нужен)
+        // 1. Пытаемся определить платформу
+
+        // Сначала Telegram
         if (window.Telegram?.WebApp) {
             const tg = window.Telegram.WebApp;
             tg.ready();
@@ -205,30 +191,32 @@ async function showProgress(barId, statusId) {
 
             userPlatform = "tg";
             console.log("Telegram пользователь:", rawUserId);
+        }
+        // Если Telegram нет — пробуем VK Bridge
+        else if (window.vkBridge) {
+            const bridge = window.vkBridge;
+
+            console.log("VK Bridge найден, отправляем VKWebAppInit");
+            await bridge.send("VKWebAppInit");
+
+            const info = await bridge.send("VKWebAppGetUserInfo");
+            rawUserId = info.id;
+            userPlatform = "vk";
+            console.log("VK пользователь:", rawUserId);
         } else {
-            // Если Telegram нет — пробуем VK
-            const bridge = await waitForVkBridge();
-            if (bridge) {
-                await bridge.send("VKWebAppInit");
-                const info = await bridge.send("VKWebAppGetUserInfo");
-                rawUserId = info.id;
-                userPlatform = "vk";
-                console.log("VK пользователь:", rawUserId);
-            } else {
-                throw new Error("Платформа не определена (ни Telegram.WebApp, ни vkBridge).");
-            }
+            throw new Error("Платформа не определена (ни Telegram.WebApp, ни vkBridge).");
         }
 
         console.log("rawUserId =", rawUserId, "platform (из окружения) =", userPlatform);
 
-        // Лёгкая проверка, что пользователь есть в базе
+        // 2. Лёгкая проверка, что пользователь есть в базе
         const user = await findUser(rawUserId);
         if (!user) {
             throw new Error("Вы не зарегистрированы. Напишите в бот");
         }
         userPlatform = user.platform || userPlatform;
 
-        // Показываем первый экран
+        // 3. Показываем первый экран
         showScreen("welcome");
     } catch (err) {
         console.error(err);
@@ -242,7 +230,6 @@ document.getElementById("startUpload")?.addEventListener("click", () =>
 );
 
 async function handleUpload(num, fieldId, nextScreen = null) {
-    // Если уже идёт загрузка этого шага — игнорируем повторный клик
     if (uploadState[num]) {
         console.log(`Загрузка #${num} уже идёт — повторный клик игнорируем`);
         return;
@@ -277,7 +264,6 @@ async function handleUpload(num, fieldId, nextScreen = null) {
             throw new Error("Не удалось определить пользователя. Перезапустите мини-апп.");
         }
 
-        // На КАЖДОЙ загрузке ещё раз ищем запись по tg-id
         const user = await findUser(rawUserId);
         console.log("handleUpload → findUser:", user);
 
@@ -309,32 +295,26 @@ async function handleUpload(num, fieldId, nextScreen = null) {
     }
 }
 
-document
-    .getElementById("submitFile1")
-    ?.addEventListener("click", () =>
-        handleUpload(1, SOLUTION_FIELDS.solution1, "upload2")
-    );
-document
-    .getElementById("submitFile2")
-    ?.addEventListener("click", () =>
-        handleUpload(2, SOLUTION_FIELDS.solution2, "upload3")
-    );
-document
-    .getElementById("submitFile3")
-    ?.addEventListener("click", () =>
-        handleUpload(3, SOLUTION_FIELDS.solution3)
-    );
+document.getElementById("submitFile1")?.addEventListener("click", () =>
+    handleUpload(1, SOLUTION_FIELDS.solution1, "upload2")
+);
+document.getElementById("submitFile2")?.addEventListener("click", () =>
+    handleUpload(2, SOLUTION_FIELDS.solution2, "upload3")
+);
+document.getElementById("submitFile3")?.addEventListener("click", () =>
+    handleUpload(3, SOLUTION_FIELDS.solution3)
+);
 
-document
-    .getElementById("skipFile2")
-    ?.addEventListener("click", () => showScreen("result"));
-document
-    .getElementById("skipFile3")
-    ?.addEventListener("click", () => showScreen("result"));
+document.getElementById("skipFile2")?.addEventListener("click", () =>
+    showScreen("result")
+);
+document.getElementById("skipFile3")?.addEventListener("click", () =>
+    showScreen("result")
+);
 
 document.getElementById("closeApp")?.addEventListener("click", () => {
     if (userPlatform === "vk" && window.vkBridge) {
-        vkBridge.send("VKWebAppClose", { status: "success" });
+        window.vkBridge.send("VKWebAppClose", { status: "success" });
     } else if (window.Telegram?.WebApp) {
         window.Telegram.WebApp.close();
     }
