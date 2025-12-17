@@ -1,7 +1,7 @@
 // ======================= MAINTENANCE MODE =======================
 // Пока идут техработы — показываем только сообщение и ничего не запускаем.
 
-const MAINTENANCE_MODE = true; // <- выключите на false, когда техработы закончатся
+const MAINTENANCE_MODE = false; // <- выключите на false, когда техработы закончатся
 
 function showMaintenance() {
   document.body.innerHTML = `
